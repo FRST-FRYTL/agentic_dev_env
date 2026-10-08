@@ -16,10 +16,10 @@ Domains: **SEC** secrets · **DST** destructive · **OUT** outward · **GRD** gu
 | Script | Event | Rules |
 |---|---|---|
 | `user_prompt_submit.py` | UserPromptSubmit | S1 secret in prompt (SEC/P1) |
-| `pre_tool_use.py` | PreToolUse | S2 bash guard (DST/OUT P1–P2, SEC P1) · S3 secret + guard paths (P0, fails closed) · S4 commit scan (SEC/P1) · project rules |
-| `post_tool_use.py` | PostToolUse | S6 output redaction (SEC/P1) · W2 wiki tracking + checks (KNW/P3) · commit nudge (KNW/P3) |
-| `stop.py` | Stop | W3 fallback wiki nudge, once per session (KNW/P3) |
-| `session_start.py` | SessionStart | W1 status injection (KNW/P3) · tool hints · allowlist change detection |
+| `pre_tool_use.py` | PreToolUse | S2 bash guard (DST/OUT P1–P2, SEC P1) · S3 secret + guard paths for file tools, Grep and shell write targets (P0, fails closed) · S4 commit scan incl. `add && commit`, `-a`, pathspecs (SEC/P1) · project rules |
+| `post_tool_use.py` | PostToolUse | S6 output redaction (SEC/P1) · W2 wiki page checks (KNW/P3) · commit nudge when HEAD moves (KNW/P3) |
+| `stop.py` | Stop | W3 fallback wiki nudge once per session, from git changes since session start; unindexed-page reminder (KNW/P3) |
+| `session_start.py` | SessionStart | W1 status injection (KNW/P3) · git snapshot for change tracking · tool hints · allowlist change detection |
 | `config_change.py` | ConfigChange | S5 settings audit (GRD/P4) |
 | `_policy.py` | — | classes, secret patterns, session state, audit log, evolution events |
 
@@ -35,6 +35,12 @@ events for this project. **Nothing turns off P0.**
 
 **Project rules**: `.claude/project-rules.json` may add Bash rules of class P1–P3 (tighten only):
 `{"rules": [{"id": "deploy", "domain": "OUT", "class": "P2", "pattern": "\\bmake deploy\\b", "reason": "Deploys to prod"}]}`
+
+**Guard files** (P0 for writes): `.claude/hooks/**`, `.claude/settings*.json` (project and `~/.claude/`),
+`.claude/sandbox*.json`, `.mcp.json`, `.pre-commit-config.yaml`; running `apply_user_settings.py` counts as a write.
+
+**Evolution events** are written only when evolution mode is on *and* the project is registered
+in the evolution repo's `projects.md` (`evolve setup`).
 
 **Logs**: `${XDG_STATE_HOME:-~/.local/state}/dev-env-hooks/audit.jsonl` (values redacted).
 

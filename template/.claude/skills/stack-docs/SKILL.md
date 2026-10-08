@@ -52,7 +52,8 @@ Facts only from the fetched docs; mark anything inferred. No marketing, no tutor
 - CLAUDE.md, between `<!-- stack-docs:start -->` and `<!-- stack-docs:end -->`, one line per
   library: `- <lib> <version>: eng-wiki/stack/<lib>.md — read when: <task conditions>`.
   Replace the placeholder line. Never touch content outside the markers.
-- `eng-wiki/index.md` → *Stack* section, same line format.
+- `eng-wiki/index.md` → *Stack* section, wiki link format:
+  `- [<lib> <version>](stack/<lib>.md) — read when: <task conditions>`.
 - `eng-wiki/log.md`: `## [date] stack | <libs>`.
 
 ## 5. When a version changes

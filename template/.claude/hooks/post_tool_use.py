@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse: S6 output redaction · W2 wiki tracking + checks · commit nudge · P2 approvals.
+"""PostToolUse: S6 output redaction · W2 wiki page checks · commit nudge · P2 approvals.
 
 All fail open; nothing here blocks. See _policy.py for classes and switches.
 """
@@ -15,11 +15,11 @@ import _policy as P  # noqa: E402
 
 REDACT_TOOLS = {"Bash", "Read", "Grep"}
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-MAX_SCAN_BYTES = 1_000_000
+MAX_SCAN_BYTES = 10_000_000
 MAX_COMMIT_NUDGES = 3
 WIKI = "eng-wiki"
 WIKI_ROOT_FILES = {"index.md", "log.md", "status.md"}
-COMMIT_DONE = re.compile(r"^\[[^\]]+ [0-9a-f]{7,}\]", re.MULTILINE)
+DECLINE = "wiki: nothing to record"
 
 
 def redact_output(data: dict) -> tuple[dict | None, list[str]]:
@@ -39,35 +39,54 @@ def rel_to(root: Path, raw: str) -> Path | None:
         return None
 
 
-def wiki_checks(root: Path, rel: Path, data: dict) -> list[str]:
-    """Light W2 checks on an edited eng-wiki file. Returns warnings."""
+def wiki_checks(root: Path, rel: Path) -> list[str]:
+    """Light W2 checks on an edited eng-wiki file. Index coverage is checked at Stop, after the
+    skill had a chance to add the index line."""
     warn: list[str] = []
     path = root / rel
-    name = rel.name
-    sub = rel.parts[1] if len(rel.parts) > 2 else ""
-    if name == "log.md" and len(rel.parts) == 2:
-        ti = data.get("tool_input") or {}
-        old, new = ti.get("old_string"), ti.get("new_string")
-        if old and new is not None and not new.startswith(old):
-            warn.append("eng-wiki/log.md is append-only: add new lines at the end, don't rewrite entries.")
+    if rel.as_posix() == f"{WIKI}/log.md":
+        old = P.git_out(root, "show", f"HEAD:{WIKI}/log.md")
+        if old and path.exists() and not path.read_text(errors="replace").startswith(old.rstrip("\n")):
+            warn.append("eng-wiki/log.md is append-only: committed entries changed. Restore them and add new "
+                        "lines at the end.")
         return warn
-    if name in WIKI_ROOT_FILES or not name.endswith(".md") or not path.exists():
-        return warn
-    if sub == "stack" and name == "sources.md":
+    if rel.name in WIKI_ROOT_FILES or rel.suffix != ".md" or not path.exists() or rel.as_posix() == f"{WIKI}/stack/sources.md":
         return warn
     text = path.read_text(errors="replace")
-    if not text.startswith("---"):
-        warn.append(f"{rel} has no frontmatter (id, type, status, created, updated, confidence, sources).")
-    else:
-        head = text.split("---", 2)[1] if text.count("---") >= 2 else ""
-        missing = [k for k in ("id:", "type:", "status:") if k not in head]
-        if missing:
-            warn.append(f"{rel} frontmatter lacks {', '.join(m.rstrip(':') for m in missing)}.")
-    index = root / WIKI / "index.md"
-    link = rel.relative_to(WIKI).as_posix()
-    if index.exists() and link not in index.read_text(errors="replace"):
-        warn.append(f"{rel} is not listed in eng-wiki/index.md (add it with a 'read when:' condition).")
+    if not text.startswith("---") or text.count("---") < 2:
+        return [f"{rel} has no frontmatter (id, type, status, created, updated, confidence, sources)."]
+    head = text.split("---", 2)[1]
+    missing = [k for k in ("id", "type", "status") if not re.search(rf"^{k}:\s*\S", head, re.M)]
+    if missing:
+        warn.append(f"{rel} frontmatter lacks {', '.join(missing)}.")
+    expected = rel.relative_to(WIKI).with_suffix("").as_posix()
+    m = re.search(r"^id:\s*(\S+)", head, re.M)
+    if m and m.group(1) != expected:
+        warn.append(f"{rel}: id should be '{expected}' (path without .md), not '{m.group(1)}'.")
     return warn
+
+
+def commit_nudge(data: dict, root: Path) -> str | None:
+    """After a successful commit (HEAD moved): nudge if code changed and the wiki did not."""
+    head = P.git_out(root, "rev-parse", "HEAD").strip()
+    with P.session_state(data) as st:
+        last = st.get("last_head")
+        if not head or head == last:
+            return None
+        st["last_head"] = head
+        if last:
+            code, wiki = P.classify(P.git_out(root, "diff", "--name-only", f"{last}..{head}").split())
+        else:  # no snapshot (e.g. resumed session): fall back to the last commit
+            code, wiki = P.classify(P.git_out(root, "show", "--name-only", "--format=", head).split())
+        snap = st.get("snap")
+        if snap:  # wiki edits made through Bash but not committed yet also count
+            wiki = wiki or P.classify(P.dirty_paths(root) - set(snap.get("dirty", [])))[1]
+        if not code or wiki or st.get("wiki_touched") or st.get("commit_nudges", 0) >= MAX_COMMIT_NUDGES:
+            return None
+        st["commit_nudges"] = st.get("commit_nudges", 0) + 1
+    return ("Commit done. If this work settled a decision or produced an insight, record it now with the wiki "
+            "skill (record), and update eng-wiki/status.md if the focus changed. If there is nothing to record, "
+            f"add the line '{DECLINE}' at the end of your answer and carry on.")
 
 
 def main() -> None:
@@ -82,9 +101,9 @@ def main() -> None:
     tuid = data.get("tool_use_id")
     if tuid:
         with P.session_state(data) as st:
-            rule = st.get("pending_asks", {}).pop(tuid, None)
+            rule = st.get("pending_asks", {}).pop(tuid, None) if st.get("pending_asks") else None
         if rule:
-            P.evolution_event("p2_approved", {"rule": rule, "tool": tool}, data)
+            P.evolution_event("p2_approved", {"rule": rule, "tool": tool, "cmd_head": P.cmd_head(ti.get("command", ""))}, data)
 
     # S6 · SEC/P1 · redact secrets in output before Claude reads it.
     if tool in REDACT_TOOLS and P.domain_enabled("SEC", "P1"):
@@ -99,34 +118,25 @@ def main() -> None:
 
     knw = P.domain_enabled("KNW", "P3")
 
-    # W2 · KNW/P3 · track what changed; check wiki edits.
+    # W2 · KNW/P3 · check wiki pages as they are written (Edit/Write tools).
     if tool in EDIT_TOOLS and knw:
         raw = ti.get("file_path") or ti.get("notebook_path") or ""
         rel = rel_to(root, raw) if raw else None
         if rel is not None:
             in_wiki = rel.parts[:1] == (WIKI,)
-            with P.session_state(data) as st:
-                st["wiki_touched" if in_wiki else "code_touched"] = True
             if in_wiki:
-                warns = wiki_checks(root, rel, data)
+                with P.session_state(data) as st:
+                    st["wiki_touched"] = True
+                warns = wiki_checks(root, rel)
                 if warns:
                     notes.append("W2 wiki check: " + " ".join(warns))
                     P.evolution_event("wiki_check_failed", {"file": rel.as_posix(), "warnings": len(warns)}, data)
 
-    # Commit nudge (D9) · KNW/P3 · free: rides on the commit's tool result, no extra turn.
+    # Commit nudge (D9) · KNW/P3 · rides on the commit's tool result, so it costs no extra turn.
     if tool == "Bash" and knw and re.search(r"\bgit\b.*\bcommit\b", ti.get("command", "")):
-        resp = data.get("tool_response") or {}
-        stdout = resp.get("stdout", "") if isinstance(resp, dict) else str(resp)
-        if COMMIT_DONE.search(stdout):
-            with P.session_state(data) as st:
-                due = st.get("code_touched") and not st.get("wiki_touched") and st.get("commit_nudges", 0) < MAX_COMMIT_NUDGES
-                if due:
-                    st["commit_nudges"] = st.get("commit_nudges", 0) + 1
-                    st["code_touched"] = False
-            if due:
-                notes.append("Commit done. If this work settled a decision or produced an insight, record it now "
-                             "with the wiki skill (record), and update eng-wiki/status.md if the focus changed. "
-                             "If there is nothing to record, say 'wiki: nothing to record' and continue.")
+        note = commit_nudge(data, root)
+        if note:
+            notes.append(note)
 
     if notes:
         out["additionalContext"] = "\n".join(notes)

@@ -67,7 +67,8 @@ update index + log (`ingest`). Library docs go through the `stack-docs` skill in
 Run `python3 .claude/skills/wiki/scripts/wiki_lint.py` (deterministic: frontmatter, index
 coverage, broken links, supersede consistency, stale pages). Then check by reading what a script
 can't: contradictions between pages, duplicated facts, status.md drift from reality. Fix the safe
-items, list the rest for the user, log a `lint` entry.
+items, list the rest for the user, log a `lint` entry. Never edit the text of an accepted ADR to fix
+drift: append a dated `## Update YYYY-MM-DD` note and bump `updated`, or supersede it.
 
 ## Rules
 - One fact, one page; link instead of copying. Specs and code are sources, not wiki content.

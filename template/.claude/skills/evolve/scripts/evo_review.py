@@ -24,11 +24,11 @@ def main(home: Path) -> int:
             ts = e.get("ts", "")
             c["first"] = min(c["first"] or ts, ts)
             c["last"] = max(c["last"], ts)
-    print("## Event clusters (candidate when count >= 2 or projects >= 2)\n")
+    print("## Event clusters (candidate when count >= 2 or projects >= 2; skill_generated always)\n")
     print("| kind | subject | events | projects | first | last | candidate? |")
     print("|---|---|---|---|---|---|---|")
     for (kind, subject), c in sorted(clusters.items(), key=lambda kv: -kv[1]["count"]):
-        ok = "yes" if c["count"] >= 2 or len(c["projects"]) >= 2 else "no"
+        ok = "yes" if c["count"] >= 2 or len(c["projects"]) >= 2 or kind == "skill_generated" else "no"
         print(f"| {kind} | {subject} | {c['count']} | {', '.join(sorted(c['projects']))} | {c['first'][:10]} | {c['last'][:10]} | {ok} |")
     print("\n## Candidates\n")
     for f in sorted((home / "candidates").glob("*.md")):

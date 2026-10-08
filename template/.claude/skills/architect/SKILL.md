@@ -55,7 +55,8 @@ in the hand-over. Reversing a decision: new ADR with `supersedes:`, set the old 
 
 ## 4. Architecture page — `eng-wiki/concepts/architecture.md`
 One page per project, updated, not duplicated: a Mermaid diagram of modules and data flow, one
-line per module (responsibility, owner file), and links to the ADRs. Frontmatter `type: concept`.
+line per module (responsibility, owner file), and links to the ADRs. Full page frontmatter (see
+the `wiki` skill) with `id: concepts/architecture`, `type: concept`.
 
 ## 5. CONTRACTS.md (only when needed)
 Write a root `CONTRACTS.md` when two or more parts will be built in parallel or by different

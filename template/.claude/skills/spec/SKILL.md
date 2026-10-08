@@ -53,15 +53,17 @@ One paragraph: who needs what, and why.
 - Q1 …   (omit if none)
 
 ## Verify
-Exact commands that prove R1…Rn, e.g. `uv run pytest -q` plus one end-to-end command and its
-expected output.
+Exact commands that prove R1…Rn, copy-pasteable from a fresh shell: `uv run pytest -q` plus one
+end-to-end command and its expected output. If a check needs a fixture (a local server, sample
+files), the command starts it, or the check lives inside a test.
 
 ## Tasks
 - [ ] T1 … (small, ordered; each ends in something runnable)
 ```
 
 Rules: every requirement is observable from outside; every requirement is covered by Verify;
-tasks reference requirements (`T2 (R1, R3)`).
+tasks reference requirements (`T2 (R1, R3)`). Status: `draft` while open questions remain,
+`agreed` once the user (or the stated assumptions) settle them, `done` when Verify passes.
 
 ## 4. Self-check before handing over
 - Could a stranger build it from this without asking? Could they tell when it is done?

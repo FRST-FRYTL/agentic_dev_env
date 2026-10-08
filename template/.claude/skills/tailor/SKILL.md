@@ -14,7 +14,9 @@ context that nobody needs makes agents worse, not better.
 1. Read the spec, `eng-wiki/concepts/architecture.md`, decisions, and stack pages.
 2. Confirm the stack (ask if unclear; default suggestion: Python + uv). Scaffold the minimum that
    runs: for Python/uv → `uv init --package <name>` (or the layout the architecture names),
-   dev deps `pytest` and `ruff`, one smoke test, `uv sync`, `uv run pytest -q` green.
+   dev deps `pytest` and `ruff`, one smoke test, `uv sync`, `uv run pytest -q` green. Keep the
+   template's own files out of the project's linters and tests (Python: `[tool.ruff]
+   extend-exclude = [".claude"]`, pytest `testpaths = ["tests"]`).
    For other stacks use their standard init tool, same rule: smallest runnable skeleton + 1 test.
 3. Fill CLAUDE.md between `<!-- tailor:commands:start -->` and `<!-- tailor:commands:end -->`:
    install, test, lint, run, the spec's verify command. Keep the hook-test line. Add only rules

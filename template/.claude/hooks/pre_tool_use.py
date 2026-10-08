@@ -7,6 +7,7 @@ denied. S2/S4 fail open. See _policy.py for classes and switches.
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import re
 import shlex
@@ -31,7 +32,7 @@ SECRET_DIRS = [HOME / ".ssh", HOME / ".aws", HOME / ".gnupg", HOME / ".config" /
 SECRET_FILES = [HOME / ".docker" / "config.json"]
 
 R_SECRET_PATH = P.Rule("S3-secret-path", "SEC", "P0", "Reading or writing credential files is locked")
-R_GUARD_PATH = P.Rule("S3-guard-path", "GRD", "P0", "Hook scripts, Claude settings and the pre-commit config are guard files")
+R_GUARD_PATH = P.Rule("S3-guard-path", "GRD", "P0", "Hook scripts, Claude settings, sandbox profiles, .mcp.json and the pre-commit config are guard files")
 
 
 def is_secret_path(p: Path) -> bool:
@@ -50,9 +51,9 @@ def is_guard_path(p: Path) -> bool:
         rest = parts[i + 1:]
         if rest[:1] == ("hooks",):
             return True
-        if len(rest) == 1 and fnmatch.fnmatch(rest[0], "settings*.json"):
+        if len(rest) == 1 and (fnmatch.fnmatch(rest[0], "settings*.json") or fnmatch.fnmatch(rest[0], "sandbox*.json")):
             return True
-    return p.name == ".pre-commit-config.yaml"
+    return p.name in (".pre-commit-config.yaml", ".mcp.json")
 
 
 def check_path(tool: str, raw: str, root: Path) -> P.Rule | None:
@@ -68,17 +69,25 @@ def check_path(tool: str, raw: str, root: Path) -> P.Rule | None:
 # ---------------------------------------------------------------- S2 bash rules
 
 SEGMENT_SPLIT = re.compile(r"\|\||&&|;|\n|\|")
-WRITE_HINT = re.compile(r"(^|\s)(>|>>|tee|sed\s+-i|rm|mv|cp|chmod|chown|truncate|ln|install|rsync|dd|"
-                        r"git\s+(checkout|restore|rm|mv)|python3?|perl|ruby|node)(\s|$)")
-GUARD_IN_CMD = re.compile(r"\.claude/(hooks\b|settings[^/\s]*\.json)|\.pre-commit-config\.yaml")
-SECRET_READ_CMD = re.compile(r"(^|[\s;&|(])(cat|less|more|head|tail|bat|grep|rg|xxd|strings|base64|cp|scp|od)\s")
-SECRET_FILE_IN_CMD = re.compile(r"(^|[\s/'\"=])(\.env(\.(?!example|sample|template|dist)\w+)*|id_(rsa|ed25519|ecdsa|dsa)|"
-                                r"\.git-credentials|\.pypirc|\.netrc|[\w.-]+\.pem)(?=$|[\s'\";|&)])|~/\.(ssh|aws|gnupg)/|"
+GUARD_RX = re.compile(r"(^|/)\.claude/hooks(/\S*)?$|(^|/)\.claude/(settings|sandbox)[^/\s]*\.json$|"
+                      r"(^|/)\.pre-commit-config\.yaml$|(^|/)\.mcp\.json$")
+GUARD_ANYWHERE = re.compile(r"\.claude/(hooks|settings[^/\s]*\.json|sandbox[^/\s]*\.json)|\.pre-commit-config\.yaml|\.mcp\.json")
+REDIRECT_TARGET = re.compile(r">>?\s*['\"]?([^\s'\";|&]+)")
+SETTINGS_WRITER = re.compile(r"apply_user_settings\.py")
+TARGET_ALL = {"rm", "rmdir", "truncate", "chmod", "chown", "touch", "tee", "sponge", "shred", "unlink"}
+TARGET_LAST = {"cp", "mv", "ln", "install", "rsync"}
+INLINE_CODE = {"python", "python3", "perl", "ruby", "node", "bash", "sh", "zsh"}
+SECRET_READ_CMD = re.compile(r"(^|[\s;&|(])(cat|less|more|head|tail|bat|grep|rg|xxd|strings|base64|cp|scp|od|awk|cut|"
+                             r"tac|nl|diff|sort|uniq|sed|jq|paste|column|vi|vim|nano|view)\s")
+SECRET_FILE_IN_CMD = re.compile(r"(^|[\s/'\"=])(\.env(\.(?!example|sample|template|dist)[\w*?]+)*[*?]*|id_(rsa|ed25519|ecdsa|dsa)|"
+                                r"\.git-credentials|\.pypirc|\.netrc|[\w.*-]+\.pem)(?=$|[\s'\";|&)])|~/\.(ssh|aws|gnupg)/|"
                                 r"\.config/gh/")
 
 BASH_RULES: list[tuple[P.Rule, re.Pattern]] = [
-    (P.Rule("S2-pipe-to-shell", "OUT", "P1", "Piping a download into a shell runs unreviewed code"),
-     re.compile(r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b|\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?python")),
+    (P.Rule("S2-pipe-to-shell", "OUT", "P1", "Running downloaded code unreviewed"),
+     re.compile(r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b|"
+                r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?python[\d.]*\b(?!\s+-c\b|\s+-m\s+json\.tool\b)|"
+                r"\b(ba|z)?sh\s+<\(\s*(curl|wget)\b|\bsource\s+<\(\s*(curl|wget)\b")),
     (P.Rule("S2-force-push", "OUT", "P1", "Force-push rewrites shared history (use --force-with-lease if really needed)"),
      re.compile(r"\bgit\b.*\bpush\b.*(\s--force(?!-with-lease)\b|\s-f\b|\s\+\S)")),
     (P.Rule("S2-reset-hard", "DST", "P1", "git reset --hard discards uncommitted work"),
@@ -93,9 +102,37 @@ BASH_RULES: list[tuple[P.Rule, re.Pattern]] = [
      re.compile(r"\bgit\b.*\b(commit|push)\b.*--no-verify\b|\bSKIP=\S*gitleaks")),
 ]
 R_PUSH_MAIN = P.Rule("S2-push-main", "OUT", "P2", "Pushing directly to main/master")
-R_RM_OUTSIDE = P.Rule("S2-rm-outside", "DST", "P1", "Recursive delete outside the project and temp directories")
+R_RM_OUTSIDE = P.Rule("S2-rm-outside", "DST", "P1", "Recursive delete of the project root, a temp root, or anything outside them")
 R_SECRET_READ = P.Rule("S2-secret-read", "SEC", "P1", "Reading credential files through the shell")
 R_GUARD_WRITE = P.Rule("S3-guard-shell", "GRD", "P0", "Changing guard files through the shell")
+
+
+def is_guard_token(tok: str) -> bool:
+    return bool(GUARD_RX.search(tok.rstrip("/")))
+
+
+def writes_guard(cmd: str) -> bool:
+    """True when a guard file is the *target* of a write, not merely mentioned."""
+    if SETTINGS_WRITER.search(cmd):
+        return True
+    if any(is_guard_token(t) for t in REDIRECT_TARGET.findall(cmd)):
+        return True
+    for toks in segments(cmd):
+        name = Path(toks[0]).name
+        args = [t for t in toks[1:] if not t.startswith("-")]
+        if name in TARGET_ALL and any(is_guard_token(a) for a in args):
+            return True
+        if name in TARGET_LAST and args and is_guard_token(args[-1]):
+            return True
+        if name == "sed" and any(t.startswith("-i") or t == "--in-place" for t in toks) and any(is_guard_token(a) for a in args):
+            return True
+        if name == "git" and len(toks) > 1 and toks[1] in ("checkout", "restore", "rm", "mv") and any(is_guard_token(a) for a in args[1:]):
+            return True
+        if name in INLINE_CODE and any(t in ("-c", "-e") for t in toks):
+            code = " ".join(toks[toks.index("-c" if "-c" in toks else "-e") + 1:])
+            if GUARD_ANYWHERE.search(code) and re.search(r"open\(|write|unlink|remove|rename|replace|truncate|>", code):
+                return True
+    return False
 
 
 def segments(cmd: str) -> list[list[str]]:
@@ -126,8 +163,8 @@ def rm_outside(toks: list[str], root: Path, cwd: Path) -> bool:
             continue
         target = Path(os.path.expandvars(os.path.expanduser(t)))
         target = (target if target.is_absolute() else cwd / target).resolve()
-        if not any(target == a or a in target.parents for a in allowed) or target in (Path("/"), HOME):
-            return True
+        if target in allowed or target in (Path("/"), HOME) or not any(a in target.parents for a in allowed):
+            return True  # the roots themselves (project, /tmp) are not deletable either
     return False
 
 
@@ -135,7 +172,7 @@ def pushes_main(toks: list[str], cwd: Path) -> bool:
     if toks[:1] != ["git"] or "push" not in toks:
         return False
     args = [t for t in toks[toks.index("push") + 1:] if not t.startswith("-")]
-    if any(re.search(r"(^|:)(main|master)$", a) for a in args[1:]):
+    if any(re.search(r"(^|:)(refs/heads/)?(main|master)$", a) for a in args[1:]):
         return True
     if len(args) <= 1:  # no refspec: pushes the current branch
         try:
@@ -149,7 +186,7 @@ def pushes_main(toks: list[str], cwd: Path) -> bool:
 
 def check_bash(cmd: str, data: dict, root: Path, cwd: Path) -> list[P.Rule]:
     hits = [rule for rule, rx in BASH_RULES if rx.search(cmd)]
-    if GUARD_IN_CMD.search(cmd) and WRITE_HINT.search(cmd):
+    if writes_guard(cmd):
         hits.append(R_GUARD_WRITE)
     if SECRET_FILE_IN_CMD.search(cmd) and SECRET_READ_CMD.search(" " + cmd):
         hits.append(R_SECRET_READ)
@@ -166,42 +203,87 @@ def check_bash(cmd: str, data: dict, root: Path, cwd: Path) -> list[P.Rule]:
 
 # ---------------------------------------------------------------- S4 commit scan
 
-R_COMMIT_SECRET = P.Rule("S4-commit-secret", "SEC", "P1", "Staged changes contain a secret")
+R_COMMIT_SECRET = P.Rule("S4-commit-secret", "SEC", "P1", "Changes about to be committed contain a secret")
+VALUE_FLAGS = {"-m", "--message", "-F", "--file", "-C", "-c", "--reuse-message", "--reedit-message", "--author",
+               "--date", "-t", "--template", "--fixup", "--squash", "--cleanup", "--trailer"}
 
 
-def is_commit(cmd: str) -> tuple[bool, bool]:
-    for toks in segments(cmd):
+def commit_scope(cmd: str) -> str | None:
+    """None if the command doesn't commit; 'staged' if only the index is committed; 'broad' if
+    the command stages or commits working-tree changes too (-a, pathspec, add && commit)."""
+    segs = segments(cmd)
+    for i, toks in enumerate(segs):
         if toks[:1] == ["git"] and "commit" in toks:
             after = toks[toks.index("commit") + 1:]
-            all_flag = any(t == "--all" or (re.match(r"^-[a-zA-Z]+$", t) and "a" in t) for t in after)
-            return True, all_flag
-    return False, False
+            broad = any(t in ("--all", "--include", "--only", "-i", "-o") or
+                        (re.match(r"^-[a-zA-Z]+$", t) and "a" in t) for t in after)
+            skip = False
+            for t in after:  # a pathspec commits the working-tree version of those files
+                if skip:
+                    skip = False
+                    continue
+                if t in VALUE_FLAGS:
+                    skip = True
+                elif not t.startswith("-"):
+                    broad = True
+            if any(s[:1] == ["git"] and len(s) > 1 and s[1] in ("add", "rm", "mv", "stage") for s in segs[:i]):
+                broad = True
+            return "broad" if broad else "staged"
+    return None
 
 
-def scan_commit(cwd: Path, all_flag: bool) -> str | None:
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=15).stdout
+
+
+def scan_commit(cwd: Path, scope: str) -> str | None:
     """Return a short finding summary, or None when clean."""
     if shutil.which("gitleaks"):
         r = subprocess.run(["gitleaks", "git", "--pre-commit", "--staged", "--redact", "--no-banner",
                             "--exit-code", "1"], cwd=cwd, capture_output=True, text=True, timeout=25)
         if r.returncode == 1:
             return "gitleaks: " + P.mask(r.stdout + r.stderr, 300)
-        if r.returncode == 0 and not all_flag:
-            return None  # clean; otherwise (error or -a) fall through to the built-in scan
-    diffs = [["git", "diff", "--cached", "-U0"]] + ([["git", "diff", "-U0"]] if all_flag else [])
-    added = []
-    for d in diffs:
-        out = subprocess.run(d, cwd=cwd, capture_output=True, text=True, timeout=15).stdout
-        added += [ln[1:] for ln in out.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
+        if r.returncode == 0 and scope == "staged":
+            return None  # clean; otherwise (error or broad scope) fall through to the built-in scan
+    texts = [_git(cwd, "diff", "--cached", "-U0")]
+    if scope == "broad":
+        texts.append(_git(cwd, "diff", "-U0"))
+    added = [ln[1:] for t in texts for ln in t.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
+    if scope == "broad":  # untracked files that `git add` could pick up
+        for rel in _git(cwd, "ls-files", "--others", "--exclude-standard").splitlines()[:500]:
+            f = cwd / rel
+            if f.is_file() and f.stat().st_size < 1_000_000:
+                added.append(f.read_text(errors="replace"))
     hits = P.find_secrets("\n".join(added))
     if hits:
-        return "fallback scan: " + ", ".join(sorted({rid for rid, _ in hits}))
+        return "built-in scan: " + ", ".join(sorted({rid for rid, _ in hits}))
     return None
 
 
 # ---------------------------------------------------------------- main
 
+R_GREP_SECRET = P.Rule("S3-secret-path", "SEC", "P0", "Searching inside credential files is locked")
+
+
 def main() -> None:
-    data = P.read_input()
+    raw_in = sys.stdin.read()
+    try:
+        data = json.loads(raw_in) if raw_in.strip() else {}
+    except json.JSONDecodeError:
+        return  # not a tool call we can judge; fail open
+    try:
+        decide(data)
+    except Exception as exc:  # noqa: BLE001
+        # P0 fails closed: a file tool, or a command that mentions a guard or secret path.
+        tool = data.get("tool_name", "")
+        cmd = (data.get("tool_input") or {}).get("command", "")
+        if tool in FILE_TOOLS or GUARD_ANYWHERE.search(cmd) or SECRET_FILE_IN_CMD.search(cmd):
+            P.emit(P.deny_output(f"[S3-error · GRD/P0] Guard failed ({type(exc).__name__}); failing closed. Tell the user."))
+            return
+        raise
+
+
+def decide(data: dict) -> None:
     tool = data.get("tool_name", "")
     ti = data.get("tool_input") or {}
     root = P.project_dir(data)
@@ -209,23 +291,26 @@ def main() -> None:
 
     if tool in FILE_TOOLS:
         raw = ti.get("file_path") or ti.get("notebook_path") or ""
-        try:
-            rule = check_path(tool, raw, root) if raw else None
-        except Exception as exc:  # noqa: BLE001 - S3 fails closed
-            rule = P.Rule("S3-error", "GRD", "P0", f"Path guard failed ({type(exc).__name__}); failing closed")
+        rule = check_path(tool, raw, root) if raw else None
         if rule:
             P.pre_tool_decision(rule, data, f"{tool} {raw}")
+        return
+
+    if tool == "Grep":
+        raw = ti.get("path") or ""
+        if raw and check_path("Read", raw, root) == R_SECRET_PATH:
+            P.pre_tool_decision(R_GREP_SECRET, data, f"Grep {raw}")
         return
 
     if tool == "Bash":
         cmd = ti.get("command", "")
         hits = check_bash(cmd, data, root, cwd)
-        committing, all_flag = is_commit(cmd)
-        if committing and P.domain_enabled("SEC", "P1"):
-            finding = scan_commit(cwd, all_flag)
+        scope = commit_scope(cmd)
+        if scope and P.domain_enabled("SEC", "P1"):
+            finding = scan_commit(cwd, scope)
             if finding:
                 hits.append(P.Rule(R_COMMIT_SECRET.id, "SEC", "P1",
-                                   f"{R_COMMIT_SECRET.reason} ({finding}); unstage it, use an env var, rotate if real"))
+                                   f"{R_COMMIT_SECRET.reason} ({finding}); remove it, use an env var, rotate if real"))
         rule = P.strongest(hits)
         if rule:
             P.pre_tool_decision(rule, data, cmd)

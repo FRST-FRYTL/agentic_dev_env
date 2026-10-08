@@ -48,6 +48,13 @@ def allowlist_check(data: dict) -> None:
     rec.write_text(json.dumps({"allowlist": digest}))
 
 
+def prune_sessions(days: int = 7) -> None:
+    cutoff = time.time() - days * 86400
+    for f in (P.state_dir() / "sessions").glob("*"):
+        if f.stat().st_mtime < cutoff:
+            f.unlink(missing_ok=True)
+
+
 def main() -> None:
     data = P.read_input()
     root = P.project_dir(data)
@@ -69,10 +76,23 @@ def main() -> None:
         lines.append("Note: gitleaks is not installed; the commit scan (S4) uses the built-in pattern set.")
     evo = P.evolution_home()
     if evo is not None:
-        lines.append(f"Evolution mode is on: hook signals go to {evo}/events/{P.project_slug(data)}/.")
+        slug = P.project_slug(data)
+        if P.registered(evo, slug):
+            lines.append(f"Evolution mode is on: hook signals go to {evo}/events/{slug}/.")
+        else:
+            lines.append(f"Evolution mode is on, but project '{slug}' is not registered, so it sends no signals. "
+                         "Run the evolve skill (setup) to register it, or opt out if this is a client repo.")
 
     try:
         allowlist_check(data)
+    except (OSError, ValueError):
+        pass
+    try:
+        with P.session_state(data) as st:  # baseline for git-based change tracking (W3, commit nudge)
+            if "snap" not in st:
+                st["snap"] = P.snapshot(root)
+                st["last_head"] = st["snap"]["head"]
+        prune_sessions()
     except (OSError, ValueError):
         pass
 

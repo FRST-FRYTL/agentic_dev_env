@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 REQUIRED = ("id", "type", "status")
+RECOMMENDED = ("created", "updated", "confidence", "sources")
 LINK = re.compile(r"\]\(([^)#\s]+\.md)(?:#[^)]*)?\)")
 STALE_DAYS = 90
 
@@ -46,6 +47,13 @@ def main(root: Path) -> int:
         for k in REQUIRED:
             if not fm.get(k):
                 errors.append(f"{rel}: frontmatter lacks '{k}'")
+        if rel != "status.md":
+            missing = [k for k in RECOMMENDED if k not in fm]
+            if missing:
+                warnings.append(f"{rel}: frontmatter lacks {', '.join(missing)}")
+            expected = rel[:-3]
+            if fm.get("id") and fm["id"] != expected:
+                warnings.append(f"{rel}: id '{fm['id']}' should be '{expected}'")
         if fm.get("id"):
             if fm["id"] in ids:
                 errors.append(f"{rel}: duplicate id {fm['id']} (also {ids[fm['id']]})")

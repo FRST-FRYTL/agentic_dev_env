@@ -34,7 +34,8 @@ and show it to the user.
    `! python3 .claude/skills/evolve/scripts/apply_user_settings.py <path>`
    It sets `env.DEV_ENV_EVOLUTION_HOME` and adds the path to `permissions.additionalDirectories`.
    It takes effect in new sessions.
-4. Register the project in `projects.md` (slug, date). Ask: is this a client or employer repo?
+4. Register the project in `projects.md` as a table row `| <slug> | <date> | on |` (slug = the
+   project folder name). Only registered projects send signals. Ask: is this a client or employer repo?
    If yes, the user should add `"DEV_ENV_EVOLUTION": "0"` under `env` in
    `.claude/settings.local.json` (also a guard file; give them the exact JSON).
 
@@ -47,9 +48,12 @@ situation as evidence. An idea without a situation is not a candidate yet.
    (kind + rule/hook/skill, event count, projects, first/last seen) and open candidates.
 2. A cluster becomes a candidate when it has ≥ 2 events or ≥ 2 projects. Update an existing
    candidate's evidence instead of duplicating it.
-3. Typical readings: many `p2_approved` or repeated `p1_blocked` for one rule → rule too strict
-   (hook-false-positive) · `hook_error` → hook bug · many `wiki_nudge_declined` → nudge too eager ·
-   `wiki_check_failed` → schema or skill unclear · `skill_generated generic=yes` → new-skill.
+3. Typical readings (use `cmd_head` to see what was blocked):
+   many `p2_approved` or repeated `p1_denied` for one rule on harmless commands → rule too strict
+   (hook-false-positive) · `p0_denied` → an intended lock; a candidate only if the blocked
+   command was clearly legitimate · `hook_error` → hook bug · many `wiki_nudge_declined` → nudge
+   too eager · `wiki_check_failed` → schema or skill unclear · `skill_generated generic=yes` →
+   new-skill (a candidate even with a single event).
 4. Close candidates with no new evidence for 90 days (`status: rejected`, reason "stale").
 5. Regenerate `index.md` (table: id · kind · target · status · evidence count) and commit the
    evolution repo (`git -C "$DEV_ENV_EVOLUTION_HOME" add -A && git commit -m "review <date>"`).

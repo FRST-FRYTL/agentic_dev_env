@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import subprocess
 import hashlib
 import json
 import os
@@ -50,13 +51,24 @@ def is_autonomous(data: dict) -> bool:
     return data.get("permission_mode") in AUTONOMOUS_MODES or os.environ.get("AGENT_AUTONOMOUS") == "1"
 
 
+_ROOT_CACHE: dict[str, Path] = {}
+
+
 def project_dir(data: dict) -> Path:
-    # cwd from the hook input follows worktrees; CLAUDE_PROJECT_DIR stays at the main checkout.
-    return Path(data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()).resolve()
+    """The repo root of the hook's cwd. Follows worktrees and survives `cd subdir`;
+    falls back to CLAUDE_PROJECT_DIR, then cwd."""
+    cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    if cwd not in _ROOT_CACHE:
+        top = ""
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+                                 capture_output=True, text=True, timeout=5).stdout.strip()
+        _ROOT_CACHE[cwd] = Path(top or os.environ.get("CLAUDE_PROJECT_DIR") or cwd).resolve()
+    return _ROOT_CACHE[cwd]
 
 
 def project_slug(data: dict) -> str:
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd()
+    root = os.environ.get("CLAUDE_PROJECT_DIR") or str(project_dir(data))
     return re.sub(r"[^A-Za-z0-9._-]+", "-", Path(root).name).strip("-") or "project"
 
 
@@ -203,8 +215,14 @@ def effective_class(rule: Rule, data: dict) -> str:
     return "P1" if rule.cls == "P2" and is_autonomous(data) else rule.cls
 
 
+def deny_output(reason: str) -> dict:
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": reason}}
+
+
 def pre_tool_decision(rule: Rule, data: dict, detail: str) -> None:
-    """Emit the PreToolUse decision for the strongest matching rule."""
+    """Emit the PreToolUse decision for the strongest matching rule.
+    The decision is written first; logging can fail without weakening it."""
     cls = effective_class(rule, data)
     if cls in ("P0", "P1"):
         decision = "deny"
@@ -213,17 +231,25 @@ def pre_tool_decision(rule: Rule, data: dict, detail: str) -> None:
     elif cls == "P2":
         decision = "ask"
         reason = f"[{rule.id} · {rule.domain}/P2] {rule.reason}. Confirm to proceed."
-        with session_state(data) as st:
-            st.setdefault("pending_asks", {})[data.get("tool_use_id", "")] = rule.id
     else:
         return
-    audit({"hook": "pre_tool_use", "rule": rule.id, "domain": rule.domain, "class": cls,
-           "decision": decision, "session": data.get("session_id"), "detail": mask(detail)})
-    if decision == "deny":
-        evolution_event("p1_blocked", {"rule": rule.id, "class": cls, "tool": data.get("tool_name")}, data)
-    emit({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                 "permissionDecision": decision,
-                                 "permissionDecisionReason": reason}})
+    out = deny_output(reason)
+    out["hookSpecificOutput"]["permissionDecision"] = decision
+    emit(out)
+    with contextlib.suppress(Exception):
+        if decision == "ask":
+            with session_state(data) as st:
+                st.setdefault("pending_asks", {})[data.get("tool_use_id", "")] = rule.id
+        audit({"hook": "pre_tool_use", "rule": rule.id, "domain": rule.domain, "class": cls,
+               "decision": decision, "session": data.get("session_id"), "detail": mask(detail)})
+        if decision == "deny":
+            evolution_event(f"{cls.lower()}_denied", {"rule": rule.id, "class": cls, "tool": data.get("tool_name"),
+                                                      "cmd_head": cmd_head(detail)}, data)
+
+
+def cmd_head(detail: str) -> str:
+    """First two tokens of a command, for diagnosing false positives without leaking content."""
+    return " ".join((detail or "").split()[:2])[:40]
 
 
 def load_project_rules(root: Path) -> list[dict]:
@@ -246,6 +272,65 @@ def load_project_rules(root: Path) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- git-based change tracking
+# Claude often writes files through Bash (heredocs, printf >>), which Edit/Write tracking misses.
+# Hooks therefore compare git state against a snapshot taken at session start.
+
+WIKI_PREFIX = "eng-wiki/"
+NOT_CODE = ("specs/", "CLAUDE.md", ".claude/", ".copier-answers.yml", "README.md")
+
+
+def git_out(root: Path, *args: str) -> str:
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return r.stdout
+    return ""
+
+
+def dirty_paths(root: Path) -> set[str]:
+    out = set()
+    for line in git_out(root, "status", "--porcelain", "-uall").splitlines():
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        if path:
+            out.add(path)
+    return out
+
+
+def snapshot(root: Path) -> dict:
+    return {"head": git_out(root, "rev-parse", "HEAD").strip(), "dirty": sorted(dirty_paths(root))}
+
+
+def classify(paths) -> tuple[list[str], list[str]]:
+    code = sorted(p for p in paths if not p.startswith(WIKI_PREFIX) and not p.startswith(NOT_CODE))
+    wiki = sorted(p for p in paths if p.startswith(WIKI_PREFIX))
+    return code, wiki
+
+
+def changed_since(root: Path, snap: dict) -> tuple[list[str], list[str], int]:
+    """(code paths, wiki paths, changed code lines) since the snapshot: commits made since plus
+    files that became dirty since."""
+    paths: set[str] = set()
+    head = git_out(root, "rev-parse", "HEAD").strip()
+    if snap.get("head") and head and head != snap["head"]:
+        paths |= set(git_out(root, "diff", "--name-only", f"{snap['head']}..{head}").split())
+    paths |= dirty_paths(root) - set(snap.get("dirty", []))
+    code, wiki = classify(paths)
+    lines = 0
+    if code:
+        tracked = set()
+        if snap.get("head"):
+            for row in git_out(root, "diff", "--numstat", snap["head"], "--", *code).splitlines():
+                a, d, path = (row.split("\t") + ["", "", ""])[:3]
+                tracked.add(path)
+                lines += (int(a) if a.isdigit() else 0) + (int(d) if d.isdigit() else 0)
+        for path in code:
+            f = root / path
+            if path not in tracked and f.is_file() and f.stat().st_size < 1_000_000:
+                lines += f.read_text(errors="replace").count("\n")
+    return code, wiki, lines
+
+
 # ---------------------------------------------------------------- state, audit, evolution
 
 @contextlib.contextmanager
@@ -257,9 +342,12 @@ def session_state(data: dict):
     path = d / f"{sid}.json"
     with open(d / f"{sid}.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        state = json.loads(path.read_text()) if path.exists() else {}
+        before = path.read_text() if path.exists() else "{}"
+        state = json.loads(before)
         yield state
-        path.write_text(json.dumps(state))
+        after = json.dumps(state)
+        if after != before:
+            path.write_text(after)
 
 
 def audit(entry: dict) -> None:
@@ -276,12 +364,19 @@ def evolution_home() -> Path | None:
     return p if p.is_dir() else None
 
 
+def registered(home: Path, slug: str) -> bool:
+    f = home / "projects.md"
+    return f.exists() and re.search(rf"^\|\s*{re.escape(slug)}\s*\|", f.read_text(), re.M) is not None
+
+
 def evolution_event(kind: str, fields: dict, data: dict) -> None:
-    """Append one redacted signal to the evolution repo (evolution mode only)."""
+    """Append one redacted signal to the evolution repo (evolution mode on and project registered)."""
     home = evolution_home()
     if home is None:
         return
     slug = project_slug(data)
+    if not registered(home, slug):
+        return
     d = home / "events" / slug
     d.mkdir(parents=True, exist_ok=True)
     entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "project": slug,
@@ -295,7 +390,7 @@ def evolution_event(kind: str, fields: dict, data: dict) -> None:
 def _cli(argv: list[str]) -> int:
     if len(argv) >= 2 and argv[0] == "event":
         fields = dict(a.split("=", 1) for a in argv[2:] if "=" in a)
-        evolution_event(argv[1], fields, {"cwd": os.getcwd()})
+        evolution_event(argv[1], fields, {"cwd": os.getcwd(), "session_id": "cli"})
         return 0
     if len(argv) == 2 and argv[0] == "scan":
         hits = find_secrets(Path(argv[1]).read_text(errors="replace"))
