@@ -1,0 +1,33 @@
+{
+  "env": { "AGENT_AUTONOMOUS": "1" },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "allowWrite": ["~/.cache/uv", "~/.local/share/uv"]
+    },
+    "network": {
+      "strictAllowlist": true,
+      "allowedDomains": [
+        "pypi.org",
+        "files.pythonhosted.org",
+        "github.com",
+        "*.githubusercontent.com",
+        "localhost",
+        "127.0.0.1:8000"
+      ]
+    },
+    "credentials": {
+      "files": [
+        { "path": "~/.ssh", "mode": "deny" },
+        { "path": "~/.aws", "mode": "deny" },
+        { "path": "~/.config/gh", "mode": "deny" }
+      ],
+      "envVars": [
+        { "name": "GITHUB_TOKEN", "mode": "deny" },
+        { "name": "GH_TOKEN", "mode": "deny" }
+      ]
+    }
+  }
+}

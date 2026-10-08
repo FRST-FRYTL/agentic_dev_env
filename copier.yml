@@ -1,0 +1,42 @@
+# agentic_dev_env — Copier template. Usage:
+#   uvx copier copy --trust gh:FRST-FRYTL/agentic_dev_env <dest>
+#   uvx copier update --trust            (inside a generated project)
+_min_copier_version: "9.0"
+_subdirectory: template
+_answers_file: .copier-answers.yml
+_exclude:
+  - "__pycache__"
+  - ".pytest_cache"
+  - "*.pyc"
+
+# Project-owned after creation: copier update never overwrites these.
+_skip_if_exists:
+  - CLAUDE.md
+  - README.md
+  - eng-wiki/index.md
+  - eng-wiki/log.md
+  - eng-wiki/status.md
+  - eng-wiki/stack/sources.md
+  - .claude/hooks/secret_allowlist.txt
+  - .gitignore
+
+_tasks:
+  - command: "git init -q -b main"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: "git add -A && git -c user.name=\"${GIT_AUTHOR_NAME:-$(git config user.name || echo dev)}\" -c user.email=\"${GIT_AUTHOR_EMAIL:-$(git config user.email || echo dev@localhost)}\" commit -q --no-verify -m 'chore: create project from agentic_dev_env'"
+    when: "{{ _copier_operation == 'copy' and initial_commit }}"
+
+project_name:
+  type: str
+  help: Project name
+  validator: "{% if not project_name.strip() %}required{% endif %}"
+
+description:
+  type: str
+  help: One sentence - what does this project do?
+  default: "TODO: describe the project (the spec skill will refine it)."
+
+initial_commit:
+  type: bool
+  help: Create an initial git commit?
+  default: true

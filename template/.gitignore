@@ -1,0 +1,18 @@
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# claude
+.claude/settings.local.json

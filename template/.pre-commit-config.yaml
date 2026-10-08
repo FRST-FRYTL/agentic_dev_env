@@ -1,0 +1,7 @@
+# Secret scan for every commit, including the ones you make yourself.
+# Install once per clone: uvx pre-commit install
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

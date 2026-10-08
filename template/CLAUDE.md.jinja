@@ -1,0 +1,40 @@
+# {{ project_name }}
+
+{{ description }}
+
+## Start here
+- `eng-wiki/status.md` is injected at session start (hook W1). `eng-wiki/index.md` is the catalog:
+  open a page only when its "read when" matches the task.
+- Specs live in `specs/`, decisions in `eng-wiki/decisions/`, stack docs in `eng-wiki/stack/`.
+
+## Commands
+<!-- tailor:commands:start -->
+- Not scaffolded yet: run the `tailor` skill after the first spec.
+- Hook tests: `uv run --with pytest pytest .claude/hooks/tests -q`
+<!-- tailor:commands:end -->
+
+## Workflow
+- New feature or unclear requirement → `spec` skill → `architect` skill → build. Skip both when
+  the change fits in one sentence.
+- Every spec ends with a runnable verify step. Run it before calling work done.
+- Recurring task (~3×) or a repeated mistake → `tailor` can generate a project skill.
+
+## Memory rule
+- After a decision or insight: `wiki` skill, op `record`. Supersede, never delete. One fact lives
+  in one place; everything else links to it.
+- Before ending a session that changed things: `wiki` skill, op `status`.
+
+## Guardrails
+- Hooks in `.claude/hooks/` classify every rule by domain and class (P0 lock … P4 audit); see
+  `.claude/hooks/README.md`. Guard files (`.claude/hooks/**`, `.claude/settings*.json`,
+  `.pre-commit-config.yaml`) are locked for Claude: ask the user to change them.
+- Never paste or copy secret values; refer to env var names.
+- If a hook blocks something that looks wrong, tell the user. Do not work around it.
+
+## Stack docs
+<!-- stack-docs:start -->
+- None yet: run the `stack-docs` skill once the stack is chosen.
+<!-- stack-docs:end -->
+
+## Compact instructions
+When compacting, keep unrecorded decisions and insights, the current task, and its verify step.
