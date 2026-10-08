@@ -48,8 +48,14 @@ def main() -> None:
                 and not st.get("stop_nudged") and not st.get("commit_nudges")):
             st["stop_nudged"] = True
             notes.append("W3: code changed this session but eng-wiki/ was not updated. If a decision, insight, or "
-                         "change of focus happened, record it with the wiki skill (record / status). If not, add "
-                         f"the line '{DECLINE}' at the end of your final answer. Keep the answer itself.")
+                         "change of focus happened, record it with the wiki skill (record / status). If not, repeat "
+                         f"your previous final answer in full and add the line '{DECLINE}' at its end. Keep the answer itself.")
+        status = root / "eng-wiki" / "status.md"
+        if "eng-wiki/status.md" in wiki and status.exists() and not status.read_text(errors="replace").startswith("---") \
+                and not st.get("status_fm_nudged"):
+            st["status_fm_nudged"] = True
+            notes.append("W3: eng-wiki/status.md lost its YAML frontmatter (id: status, type: status, status: active, "
+                         "updated: <date>). Restore it.")
         missing = unindexed(root, wiki)
         if missing and not st.get("index_nudged"):
             st["index_nudged"] = True

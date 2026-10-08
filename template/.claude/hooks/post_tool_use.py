@@ -80,7 +80,7 @@ def commit_nudge(data: dict, root: Path) -> str | None:
             code, wiki = P.classify(P.git_out(root, "show", "--name-only", "--format=", head).split())
         snap = st.get("snap")
         if snap:  # wiki edits made through Bash but not committed yet also count
-            wiki = wiki or P.classify(P.dirty_paths(root) - set(snap.get("dirty", [])))[1]
+            wiki = wiki or P.classify(P.newly_changed(root, snap))[1]
         if not code or wiki or st.get("wiki_touched") or st.get("commit_nudges", 0) >= MAX_COMMIT_NUDGES:
             return None
         st["commit_nudges"] = st.get("commit_nudges", 0) + 1

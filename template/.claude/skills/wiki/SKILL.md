@@ -50,7 +50,8 @@ supersedes: []                         # optional
 5. Focus changed? Update `status.md`.
 
 ### status — at the end of a session that changed things
-Rewrite `status.md` (keep it under ~40 lines, it is injected every session):
+Rewrite `status.md` (keep it under ~40 lines, it is injected every session; keep its YAML
+frontmatter and bump `updated`):
 Focus (one sentence) · Done (this session, newest first, max ~8 lines) · Next (ordered) ·
 Blockers. Move older "Done" lines to `log.md` if they aren't there yet. Bump `updated`.
 

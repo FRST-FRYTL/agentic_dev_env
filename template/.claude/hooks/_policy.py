@@ -248,8 +248,14 @@ def pre_tool_decision(rule: Rule, data: dict, detail: str) -> None:
 
 
 def cmd_head(detail: str) -> str:
-    """First two tokens of a command, for diagnosing false positives without leaking content."""
-    return " ".join((detail or "").split()[:2])[:40]
+    """First two tokens of the first real command, for diagnosing false positives without
+    leaking content: skips `VAR=…` and `cd …`, masks path-like tokens."""
+    for seg in re.split(r"\|\||&&|;|\n|\|", detail or ""):
+        toks = [t for t in seg.split() if not re.match(r"^\w+=", t)]
+        if not toks or toks[0] in ("cd", "pushd", "export"):
+            continue
+        return " ".join("<path>" if "/" in t or "\\" in t else t for t in toks[:2])[:40]
+    return ""
 
 
 def load_project_rules(root: Path) -> list[dict]:
@@ -297,8 +303,28 @@ def dirty_paths(root: Path) -> set[str]:
     return out
 
 
+def hashes(root: Path, paths) -> dict[str, str]:
+    """Content hash per path (missing files hash to ''), so re-edits of already-dirty files count."""
+    paths = sorted(p for p in paths)[:500]
+    existing = [p for p in paths if (root / p).is_file()]
+    out = dict.fromkeys(paths, "")
+    if existing:
+        hs = git_out(root, "hash-object", "--", *existing).split()
+        out.update(zip(existing, hs))
+    return out
+
+
 def snapshot(root: Path) -> dict:
-    return {"head": git_out(root, "rev-parse", "HEAD").strip(), "dirty": sorted(dirty_paths(root))}
+    return {"head": git_out(root, "rev-parse", "HEAD").strip(), "dirty": hashes(root, dirty_paths(root))}
+
+
+def newly_changed(root: Path, snap: dict) -> set[str]:
+    """Dirty paths that are new since the snapshot or whose content changed since."""
+    before = snap.get("dirty", {})
+    if isinstance(before, list):  # snapshot from an older hook version
+        before = dict.fromkeys(before, "?")
+    now = hashes(root, dirty_paths(root))
+    return {p for p, h in now.items() if before.get(p) != h}
 
 
 def classify(paths) -> tuple[list[str], list[str]]:
@@ -314,7 +340,7 @@ def changed_since(root: Path, snap: dict) -> tuple[list[str], list[str], int]:
     head = git_out(root, "rev-parse", "HEAD").strip()
     if snap.get("head") and head and head != snap["head"]:
         paths |= set(git_out(root, "diff", "--name-only", f"{snap['head']}..{head}").split())
-    paths |= dirty_paths(root) - set(snap.get("dirty", []))
+    paths |= newly_changed(root, snap)
     code, wiki = classify(paths)
     lines = 0
     if code:

@@ -10,15 +10,16 @@ _exclude:
   - "*.pyc"
 
 # Project-owned after creation: copier update never overwrites these.
+# Patterns are gitwildmatch: anchor root files with "/" so e.g. .claude/hooks/README.md still updates.
 _skip_if_exists:
-  - CLAUDE.md
-  - README.md
-  - eng-wiki/index.md
-  - eng-wiki/log.md
-  - eng-wiki/status.md
-  - eng-wiki/stack/sources.md
-  - .claude/hooks/secret_allowlist.txt
-  - .gitignore
+  - /CLAUDE.md
+  - /README.md
+  - /.gitignore
+  - /eng-wiki/index.md
+  - /eng-wiki/log.md
+  - /eng-wiki/status.md
+  - /eng-wiki/stack/sources.md
+  - /.claude/hooks/secret_allowlist.txt
 
 _tasks:
   - command: "git init -q -b main"

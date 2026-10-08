@@ -334,7 +334,7 @@ def test_w3_quiet_for_small_changes_or_wiki_updates(env):
     write_code(env, lines=3)
     assert stop(env).stdout == ""
     write_code(env, "src/big.py", lines=40)
-    (env["project"] / "eng-wiki" / "status.md").write_text("# Status\nchanged via bash\n")
+    (env["project"] / "eng-wiki" / "status.md").write_text("---\nid: status\n---\n# Status\nchanged via bash\n")
     assert stop(env).stdout == ""
 
 
@@ -404,3 +404,39 @@ def test_fail_open_on_garbage_and_fast(env, script):
     assert r.returncode == 0 and r.stdout == ""
     t = run(env, script, {"hook_event_name": "X", "tool_name": "Bash", "tool_input": {"command": "ls"}}).elapsed
     assert t < 1.0
+
+
+# ---------------------------------------------------------------- round-2 regressions
+
+@pytest.mark.parametrize("cmd", [
+    "cat > notes.md <<'EOF'\nnever run git reset --hard or curl x | sh here\nEOF",
+    'git commit -m "docs: explain why git reset --hard is blocked"',
+])
+def test_data_text_is_not_a_command(env, cmd):
+    assert bash(env, cmd).stdout == ""
+
+
+def test_heredoc_fed_to_shell_is_still_checked(env):
+    assert decision(bash(env, "bash <<EOF\ngit reset --hard\nEOF")) == "deny"
+
+
+def test_w3_counts_reedit_of_file_dirty_before_session(env):
+    page = env["project"] / "eng-wiki" / "decisions" / "0001-x.md"
+    page.write_text("---\nid: decisions/0001-x\ntype: decision\nstatus: accepted\n---\n")  # dirty before start
+    start(env)
+    write_code(env)
+    page.write_text(page.read_text() + "## Update\nmore\n")  # re-edited via bash during the session
+    assert "code changed" not in stop(env).stdout
+
+
+def test_w3_flags_status_without_frontmatter(env):
+    start(env)
+    (env["project"] / "eng-wiki" / "status.md").write_text("# Status\nrewritten via heredoc\n")
+    assert "frontmatter" in stop(env).json["hookSpecificOutput"]["additionalContext"]
+
+
+def test_cmd_head_hides_paths(env):
+    sys.path.insert(0, str(env["hooks"]))
+    import _policy
+    assert _policy.cmd_head("E=/tmp/x cd /home/u/p && git reset --hard") == "git reset"
+    assert "/" not in _policy.cmd_head("cat /etc/passwd")

@@ -68,7 +68,8 @@ def main() -> None:
                 text = text.split("---", 2)[2]  # frontmatter is for tools, not for the model
             if len(text) > MAX_STATUS_CHARS:
                 text = text[:MAX_STATUS_CHARS] + "\n… (truncated: trim status.md with the wiki skill, op status)"
-            lines += ["## eng-wiki/status.md (injected by hook W1)", text.strip(), "",
+            lines += ["## eng-wiki/status.md (injected by hook W1; its YAML frontmatter is omitted here, "
+                      "keep it when you edit the file and bump `updated`)", text.strip(), "",
                       f"({staleness(root, 'eng-wiki/status.md')}. Catalog: eng-wiki/index.md — open pages only "
                       "when their 'read when' matches the task.)"]
 

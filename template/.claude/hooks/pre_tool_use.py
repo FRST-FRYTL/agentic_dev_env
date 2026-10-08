@@ -184,7 +184,29 @@ def pushes_main(toks: list[str], cwd: Path) -> bool:
     return False
 
 
+HEREDOC_START = re.compile(r"<<-?\s*['\"]?(\w+)['\"]?")
+SHELLS = re.compile(r"(^|[\s;&|(])(ba|z|da)?sh|python[\d.]*|perl|ruby|node|ssh|exec|eval")
+MESSAGE_ARG = re.compile(r"(\s(?:-m|--message)(?:=|\s+))(\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*')")
+
+
+def strip_data(cmd: str) -> str:
+    """Remove text that is data, not commands: heredoc bodies (unless fed to an interpreter) and
+    commit messages. Keeps the heredoc's first line, so redirect targets still count."""
+    lines, out, i = cmd.split("\n"), [], 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        m = HEREDOC_START.search(line)
+        i += 1
+        if m and not SHELLS.search(line[:m.start()].split("|")[-1].strip().split(" ")[0] if line[:m.start()].strip() else ""):
+            while i < len(lines) and lines[i].strip() != m.group(1):
+                i += 1
+            i += 1
+    return MESSAGE_ARG.sub(lambda m: m.group(1) + '"…"', "\n".join(out))
+
+
 def check_bash(cmd: str, data: dict, root: Path, cwd: Path) -> list[P.Rule]:
+    cmd = strip_data(cmd)
     hits = [rule for rule, rx in BASH_RULES if rx.search(cmd)]
     if writes_guard(cmd):
         hits.append(R_GUARD_WRITE)
