@@ -59,12 +59,14 @@ situation as evidence. An idea without a situation is not a candidate yet.
    evolution repo (`git -C "$DEV_ENV_EVOLUTION_HOME" add -A && git commit -m "review <date>"`).
 
 ## promote — move an accepted candidate into the template
-Needs the template checkout (ask for the path; default `~/Projects/agentic_dev_env`).
+Needs two checkouts (ask for the paths): the public template (default `~/Projects/agentic_dev_env`)
+and its private notes repo with design docs and the template's own eng-wiki (default
+`~/Projects/agentic_dev_env-dev`; if there is none, put the ADR text in the commit message).
 1. Show the candidate; the user decides accept / reject.
-2. Accept: in the template repo write an ADR in its `eng-wiki/decisions/` (cite the candidate),
-   make the change under `template/`, run the template's tests, and commit on a branch.
+2. Accept: write an ADR in the notes repo's `eng-wiki/decisions/` (cite the candidate), make the
+   change under `template/` in the template repo, run the template's tests, commit on a branch.
 3. Mark the candidate `status: promoted` with the template commit. Projects pick the change up
-   with `copier update`.
+   with `copier update` once the template is tagged.
 
 ## seed — import learnings from existing repos (one-time)
 For each repo given: read its wiki learnings/insights. Sort each into: dev-environment lesson →

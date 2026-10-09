@@ -63,8 +63,6 @@ into improvement candidates and promotes accepted ones into this template. Turn 
 ```text
 copier.yml     template config
 template/      what gets copied into a project
-specs/         design, research, open decisions
-eng-wiki/      decisions about the template itself
 ```
 
 Tests: `cd template && uv run --with pytest pytest .claude/hooks/tests -q`
